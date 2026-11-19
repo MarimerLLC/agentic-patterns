@@ -75,6 +75,6 @@ public sealed class OrderBook
     public void MarkRefunded(string orderId, string kind)
     {
         if (_orders.TryGetValue(orderId, out var o))
-            _orders[orderId] = o with { Status = kind == ActionKind.CancelBackorder ? "Cancelled" : "Refunded" };
+            _orders[orderId] = o with { Status = kind == ActionKind.CancelBackorder ? OrderStatus.Cancelled : OrderStatus.Refunded };
     }
 }

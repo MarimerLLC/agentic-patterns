@@ -16,26 +16,25 @@ public sealed partial class Router(ModelGateway model, DecisionClient? decision 
     private const string Instructions = "Which Trailhead Gear support team should handle this customer message?";
     private static readonly Dictionary<string, string> Options = new()
     {
-        ["billing"] = "Refunds, charges, cancellations, payment problems",
-        ["technical"] = "Setting up, using or repairing a product Trailhead Gear sold",
-        ["general"] = "Questions about Trailhead Gear itself: store hours, shipping times, the products we sell",
-        ["unknown"] = "Anything not about Trailhead Gear's orders, products or store, for example travel advice or general outdoor questions",
+        [RouteCategory.Billing] = "Refunds, charges, cancellations, payment problems",
+        [RouteCategory.Technical] = "Setting up, using or repairing a product Trailhead Gear sold",
+        [RouteCategory.General] = "Questions about Trailhead Gear itself: store hours, shipping times, the products we sell",
+        [RouteCategory.Unknown] = "Anything not about Trailhead Gear's orders, products or store, for example travel advice or general outdoor questions",
     };
 
     public const double ConfidenceFloor = 0.6;
-    public static readonly string[] Categories = ["billing", "technical", "general"];
 
-    private const string System = """
+    private const string System = $"""
         You are the triage router for Trailhead Gear customer support.
         Classify the customer's message into exactly one category:
-          billing   - refunds, charges, cancellations, payment problems
-          technical - setting up, using or repairing a product Trailhead Gear sold
-          general   - questions about Trailhead Gear itself: store hours, shipping times,
+          {RouteCategory.Billing}   - refunds, charges, cancellations, payment problems
+          {RouteCategory.Technical} - setting up, using or repairing a product Trailhead Gear sold
+          {RouteCategory.General}   - questions about Trailhead Gear itself: store hours, shipping times,
                       the products we sell
-          unknown   - anything that is not about Trailhead Gear's orders, products or
+          {RouteCategory.Unknown}   - anything that is not about Trailhead Gear's orders, products or
                       store (for example travel advice or general outdoor questions),
                       or when you are not sure
-        Support handles only those categories. Prefer "unknown" over guessing.
+        Support handles only those categories. Prefer "{RouteCategory.Unknown}" over guessing.
         Respond with JSON only.
         """;
 
@@ -46,7 +45,7 @@ public sealed partial class Router(ModelGateway model, DecisionClient? decision 
     /// </summary>
     public async Task<(RouteDecision Route, string RoutedBy)> ClassifyAsync(CustomerRequest request, CancellationToken ct = default)
     {
-        using var _ = Stage.Enter("router");
+        using var _ = Stage.Enter(StageName.Router);
         RouteDecision route;
         string routedBy;
 
@@ -75,16 +74,16 @@ public sealed partial class Router(ModelGateway model, DecisionClient? decision 
 
         // Abstention is enforced in code, not left to the prompt.
         var category = route.Category.Trim().ToLowerInvariant();
-        if (!Categories.Contains(category) || route.Confidence < ConfidenceFloor)
-            return (route with { Category = "unknown" }, routedBy);
+        if (!RouteCategory.Handled.Contains(category) || route.Confidence < ConfidenceFloor)
+            return (route with { Category = RouteCategory.Unknown }, routedBy);
         return (route with { Category = category }, routedBy);
     }
 
     /// <summary>Capabilities per route. Classification picks the route; code picks the powers.</summary>
     public static IReadOnlyList<string> CapabilitiesFor(string category) => category switch
     {
-        "billing" => ["get_order", "issue_refund", "cancel_backorder", "get_payment_status", "send_customer_message"],
-        "technical" or "general" => ["get_order", "send_customer_message"],
+        RouteCategory.Billing => [ToolName.GetOrder, ToolName.IssueRefund, ToolName.CancelBackorder, ToolName.GetPaymentStatus, ToolName.SendCustomerMessage],
+        RouteCategory.Technical or RouteCategory.General => [ToolName.GetOrder, ToolName.SendCustomerMessage],
         _ => [],
     };
 

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using RefundDesk.Domain;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -88,7 +89,8 @@ public static class FlowView
         var spin = Spinner[frame % Spinner.Length];
         var act = t.Activity ?? "";
         var grid = new Grid().AddColumn(new GridColumn().NoWrap().Width(18)).AddColumn();
-        var offRoute = t.Route is not null && t.Route.Category != "billing";
+        var offRoute = t.Route is not null && t.Route.Category != RouteCategory.Billing;
+        bool Doing(string activity) => act.StartsWith(activity, StringComparison.OrdinalIgnoreCase);
 
         void Stage(S s, string name, string detail = "")
         {
@@ -107,26 +109,26 @@ public static class FlowView
         void Sub(string text, string detail) => grid.AddRow(new Markup($"  [grey]{text}[/]"), new Markup(detail));
         void Link() => grid.AddRow(new Markup("[grey]│[/]"), new Text(""));
         S Is(bool done, params string[] activities) =>
-            done ? S.Done : activities.Any(a => act.StartsWith(a, StringComparison.OrdinalIgnoreCase)) ? S.Active : offRoute ? S.Skipped : S.Pending;
+            done ? S.Done : activities.Any(Doing) ? S.Active : offRoute ? S.Skipped : S.Pending;
 
         // ② Router
         var routeDetail = t.Route is null ? "" :
             $"[{(offRoute ? "red" : "green")}]{Ui.E(t.Route.Category)}[/] {t.Route.Confidence:0.00} [grey]{Ui.E(Short(t.RoutedBy?.Split(' ')[0] ?? "", 14))}[/]";
-        Stage(Is(t.Route is not null, "routing"), "② Router", routeDetail);
+        Stage(Is(t.Route is not null, TaskActivity.Routing), "② Router", routeDetail);
         Link();
 
         // ⑦ Handoff
-        Stage(offRoute ? S.Done : Is(t.Handoff is not null && t.Route is not null, "routing"), "⑦ Handoff",
+        Stage(offRoute ? S.Done : Is(t.Handoff is not null && t.Route is not null, TaskActivity.Routing), "⑦ Handoff",
             t.Handoff is null ? "" : offRoute
-                ? $"[yellow]→ {(t.Route!.Category == "unknown" ? "human queue" : $"{t.Route.Category} specialist")}[/]"
+                ? $"[yellow]→ {(t.Route!.Category == RouteCategory.Unknown ? "human queue" : $"{t.Route.Category} specialist")}[/]"
                 : $"{Ui.E(string.Join(" ", t.Handoff.OrderIds.Select(id => $"#{id}")))} [grey]→ {Ui.E(t.Handoff.To)}[/]");
         Link();
 
         // ⑤ Orchestrator + ③ workers
-        Stage(Is(t.Plan is not null, "planning"), "⑤ Orchestrator", t.Plan is null ? "" : $"{t.Plan.Subtasks.Count} research tasks");
+        Stage(Is(t.Plan is not null, TaskActivity.Planning), "⑤ Orchestrator", t.Plan is null ? "" : $"{t.Plan.Subtasks.Count} research tasks");
         if (t.Plan is not null)
         {
-            var researching = act.StartsWith("research", StringComparison.OrdinalIgnoreCase);
+            var researching = Doing(TaskActivity.Researching);
             foreach (var s in t.Plan.Subtasks)
             {
                 var f = t.Findings.FirstOrDefault(x => x.SubtaskId == s.Id);
@@ -136,15 +138,15 @@ public static class FlowView
             }
             foreach (var f in t.Findings.Where(x => t.Plan.Subtasks.All(s => s.Id != x.SubtaskId)))
                 Sub($"├ ③ {Short(f.Source, 11)}", $"{(f.QuoteVerified ? "[green]✓[/]" : "[red]✗[/]")} [blue]follow-up[/]");
-            if (act.StartsWith("follow-up", StringComparison.OrdinalIgnoreCase))
-                Sub("├ ③ follow-up", $"[yellow]{spin} {Ui.E(Short(act["follow-up".Length..].Trim(' ', ':'), 22))}[/]");
+            if (Doing(TaskActivity.FollowUp))
+                Sub("├ ③ follow-up", $"[yellow]{spin} {Ui.E(Short(act[TaskActivity.FollowUp.Length..].Trim(' ', ':'), 22))}[/]");
         }
         Link();
 
         // ⑥ Evaluator
-        var evalDone = t.Reached("evaluated");
+        var evalDone = t.Reached(TaskPhase.Evaluated);
         var lastEval = t.Evaluations.LastOrDefault();
-        Stage(evalDone && lastEval is { Pass: false } ? S.Failed : Is(evalDone, "drafting", "evaluating", "follow-up"),
+        Stage(evalDone && lastEval is { Pass: false } ? S.Failed : Is(evalDone, TaskActivity.Drafting, TaskActivity.Evaluating, TaskActivity.FollowUp),
             "⑥ Evaluator", t.Evaluations.Count == 0 ? "" : $"{t.Drafts.Count} draft(s)");
         for (var i = 0; i < t.Evaluations.Count; i++)
         {
@@ -153,63 +155,67 @@ public static class FlowView
                 ? $"[green]✓ {Ui.E(e.Kind)} passed[/]"
                 : $"[red]✗ {Ui.E(e.Kind)}:[/] [grey]{Ui.E(Short(e.Issues.FirstOrDefault() ?? "", 34))}[/]");
         }
-        if (!evalDone && (act.StartsWith("drafting", StringComparison.OrdinalIgnoreCase) || act.StartsWith("evaluating", StringComparison.OrdinalIgnoreCase)))
-            Sub($"├ round {t.Drafts.Count + (act.StartsWith("drafting", StringComparison.OrdinalIgnoreCase) ? 1 : 0)}", $"[yellow]{spin} {Ui.E(act)}[/]");
+        if (!evalDone && (Doing(TaskActivity.Drafting) || Doing(TaskActivity.Evaluating)))
+            Sub($"├ round {t.Drafts.Count + (Doing(TaskActivity.Drafting) ? 1 : 0)}", $"[yellow]{spin} {Ui.E(act)}[/]");
         Link();
 
         // ⑧ Human checkpoint
         var approval = t.Approval;
         var human = approval switch
         {
-            { Decision: "approved" } => S.Done,
-            { Decision: "rejected" } => S.Failed,
-            _ when act.StartsWith("awaiting", StringComparison.OrdinalIgnoreCase) || act.StartsWith("paused", StringComparison.OrdinalIgnoreCase) => S.Waiting,
+            { Decision: ApprovalDecision.Approved } => S.Done,
+            { Decision: ApprovalDecision.Rejected } => S.Failed,
+            _ when Doing(TaskActivity.AwaitingApproval) || Doing(TaskActivity.Paused) => S.Waiting,
             _ => offRoute ? S.Skipped : S.Pending,
         };
         Stage(human, "⑧ Human", approval switch
         {
-            { Decision: "approved" } a => $"[green]approved[/] [grey]by {Ui.E(a.Approver)}[/] {Ui.Money(a.Actions.Sum(x => x.Action.AmountCents))}",
-            { Decision: "rejected" } a => $"[red]rejected[/] [grey]by {Ui.E(a.Approver)}[/]",
-            _ when act.StartsWith("paused", StringComparison.OrdinalIgnoreCase) => "[yellow]paused · --resume to continue[/]",
+            { Decision: ApprovalDecision.Approved } a => $"[green]approved[/] [grey]by {Ui.E(a.Approver)}[/] {Ui.Money(a.Actions.Sum(x => x.Action.AmountCents))}",
+            { Decision: ApprovalDecision.Rejected } a => $"[red]rejected[/] [grey]by {Ui.E(a.Approver)}[/]",
+            _ when Doing(TaskActivity.Paused) => "[yellow]paused · --resume to continue[/]",
             _ when human == S.Waiting => $"[yellow]waiting for a person[/] {(t.Proposal is { } p ? Ui.Money(p.Actions.Sum(a => a.AmountCents)) : "")}",
             _ => "",
         });
         Link();
 
         // ④ Tool-use loop
-        var execDone = t.Reached("executed");
-        var stopped = t.ExecutionLog.Any(l => l.StartsWith("stopped:"));
-        Stage(stopped ? S.Failed : Is(execDone, "executing"), "④ Tool loop",
-            t.ExecutionLog.Count == 0 ? "" : $"{t.ExecutionLog.Count(l => l.Contains(") -> "))} tool calls");
+        var execDone = t.Reached(TaskPhase.Executed);
+        var stopped = t.ExecutionLog.Any(l => l.StartsWith(ExecutionLogEntry.Stopped));
+        Stage(stopped ? S.Failed : Is(execDone, TaskActivity.Executing), "④ Tool loop",
+            t.ExecutionLog.Count == 0 ? "" : $"{t.ExecutionLog.Count(l => l.Contains(")" + ExecutionLogEntry.ResultSeparator))} tool calls");
         foreach (var line in t.ExecutionLog.TakeLast(8))
         {
-            if (line.StartsWith("finished:")) { Sub("└ done", "[green]model finished[/]"); continue; }
-            if (line.StartsWith("stopped:")) { Sub("└ stopped", $"[red]{Ui.E(Short(line[8..].Trim(), 30))}[/]"); continue; }
+            if (line.StartsWith(ExecutionLogEntry.Finished)) { Sub("└ done", "[green]model finished[/]"); continue; }
+            if (line.StartsWith(ExecutionLogEntry.Stopped)) { Sub("└ stopped", $"[red]{Ui.E(Short(line[ExecutionLogEntry.Stopped.Length..].Trim(), 30))}[/]"); continue; }
             var name = line.Split('(')[0];
-            var result = line.Contains(" -> ") ? line[(line.IndexOf(" -> ", StringComparison.Ordinal) + 4)..] : "";
-            var verdict = result.Split(':')[0];
-            var color = verdict switch { "OK" => "green", "DUPLICATE" => "blue", "TIMEOUT" or "DENIED" or "ERROR" => "red", _ => "grey" };
-            var label = verdict switch
+            var separator = line.IndexOf(ExecutionLogEntry.ResultSeparator, StringComparison.Ordinal);
+            var call = separator >= 0 ? line[..separator] : line;
+            var result = separator >= 0 ? line[(separator + ExecutionLogEntry.ResultSeparator.Length)..] : "";
+            var (color, label) = ToolOutcome.Of(result) switch
             {
-                "OK" => "✓", "DUPLICATE" => "↺ duplicate", "TIMEOUT" => "⚠ TIMEOUT", "DENIED" => "✗ denied", "ERROR" => "✗ error",
-                _ when result.StartsWith("completed") => "✓ completed", _ when result.StartsWith("not_found") => "? not found",
-                _ => "✓",
+                ToolOutcome.Ok => ("green", "✓"),
+                ToolOutcome.Duplicate => ("blue", "↺ duplicate"),
+                ToolOutcome.Timeout => ("red", "⚠ TIMEOUT"),
+                ToolOutcome.Denied => ("red", "✗ denied"),
+                ToolOutcome.Error => ("red", "✗ error"),
+                ToolOutcome.Completed => ("green", "✓ completed"),
+                ToolOutcome.NotFound => ("grey", "? not found"),
+                _ => ("grey", "✓"),
             };
-            if (result.StartsWith("completed")) color = "green";
-            var order = System.Text.RegularExpressions.Regex.Match(line.Split(" -> ")[0], @"orderId=#?(\d+)") is { Success: true } m ? $" #{m.Groups[1].Value}" : "";
+            var order = System.Text.RegularExpressions.Regex.Match(call, @"orderId=#?(\d+)") is { Success: true } m ? $" #{m.Groups[1].Value}" : "";
             var step = name switch
             {
-                "get_order" => "read", "issue_refund" => "refund", "cancel_backorder" => "cancel",
-                "get_payment_status" => "status?", "send_customer_message" => "send reply", _ => name,
+                ToolName.GetOrder => "read", ToolName.IssueRefund => "refund", ToolName.CancelBackorder => "cancel",
+                ToolName.GetPaymentStatus => "status?", ToolName.SendCustomerMessage => "send reply", _ => name,
             };
             Sub($"├ {Short(step + order, 15)}", $"[{color}]{Ui.E(label)}[/]");
         }
-        if (act.StartsWith("executing", StringComparison.OrdinalIgnoreCase) && !execDone)
+        if (Doing(TaskActivity.Executing) && !execDone)
             Sub("├ ...", $"[yellow]{spin} model choosing next step[/]");
         Link();
 
         // Verify
-        Stage(t.Verified switch { true => S.Done, false => S.Failed, _ => Is(false, "verifying") }, "✓ Verify",
+        Stage(t.Verified switch { true => S.Done, false => S.Failed, _ => Is(false, TaskActivity.Verifying) }, "✓ Verify",
             t.Verified switch
             {
                 true => "[green]ledger + outbox match the approval[/]",
@@ -223,7 +229,7 @@ public static class FlowView
             _ => act,
         };
         grid.AddRow(new Text(""), new Text(""));
-        grid.AddRow(new Markup("[grey]now[/]"), new Markup(act is "done" ? "[green]done[/]" : $"[yellow]{Ui.E(Short(status, 40))}[/]"));
+        grid.AddRow(new Markup("[grey]now[/]"), new Markup(act is TaskActivity.Done ?"[green]done[/]" : $"[yellow]{Ui.E(Short(status, 40))}[/]"));
         grid.AddRow(new Markup("[grey]⑨ task record[/]"),
             new Markup($"[grey]{Ui.E(Path.GetFileName(path ?? ""))} · saved {savedUtc.ToLocalTime():HH:mm:ss}[/]"));
 

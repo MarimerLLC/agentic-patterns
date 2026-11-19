@@ -17,9 +17,12 @@ public sealed class Orchestrator(ModelGateway model)
 {
     public const int MaxWorkers = 4;
 
+    /// <summary>Heading that introduces evaluator feedback in a revision request.</summary>
+    public const string FeedbackHeading = "EVALUATOR FEEDBACK";
+
     public async Task<ResearchPlan> PlanAsync(CustomerRequest request, IReadOnlyList<Order> orders, CancellationToken ct = default)
     {
-        using var _ = Stage.Enter("orchestrator:plan");
+        using var _ = Stage.Enter(StageName.OrchestratorPlan);
         var catalog = string.Join("\n", SampleData.Knowledge.Values.Select(k => $"  {k.Id}: {k.Title}"));
 
         var system = $"""
@@ -50,7 +53,7 @@ public sealed class Orchestrator(ModelGateway model)
         CustomerRequest request, IReadOnlyList<Order> orders, IReadOnlyList<Finding> findings, Evaluation feedback,
         CancellationToken ct = default)
     {
-        using var _ = Stage.Enter("orchestrator:followup");
+        using var _ = Stage.Enter(StageName.OrchestratorFollowUp);
         var catalog = string.Join("\n", SampleData.Knowledge.Values.Select(k => $"  {k.Id}: {k.Title}"));
 
         var system = $"""
@@ -87,7 +90,7 @@ public sealed class Orchestrator(ModelGateway model)
 
     private async Task<Finding> RunWorkerAsync(Subtask subtask, CancellationToken ct)
     {
-        using var _ = Stage.Enter($"worker:{subtask.Source}");
+        using var _ = Stage.Enter(StageName.WorkerFor(subtask.Source));
         var source = SampleData.Knowledge[subtask.Source];
 
         var system = """
@@ -108,7 +111,7 @@ public sealed class Orchestrator(ModelGateway model)
         CustomerRequest request, IReadOnlyList<Order> orders, IReadOnlyList<Finding> findings,
         Evaluation? feedback, Proposal? previous, CancellationToken ct = default)
     {
-        using var _ = Stage.Enter("orchestrator:synthesize");
+        using var _ = Stage.Enter(StageName.OrchestratorSynthesize);
         var system = $"""
             You are the lead billing specialist. Using ONLY the verified findings and order
             facts, propose a resolution. Each action must be "{ActionKind.Refund}" (delivered order) or
@@ -125,7 +128,7 @@ public sealed class Orchestrator(ModelGateway model)
 
         if (feedback is not null && previous is not null)
         {
-            user.AppendLine("\nEVALUATOR FEEDBACK on your previous draft. Fix every issue:");
+            user.AppendLine($"\n{FeedbackHeading} on your previous draft. Fix every issue:");
             foreach (var issue in feedback.Issues) user.AppendLine($"  - {issue}");
             user.AppendLine($"\nPrevious draft:\n{JsonSerializer.Serialize(previous, Json.Options)}");
         }

@@ -26,13 +26,13 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
 
         var message = stage switch
         {
-            "router" => Text(Router(Last(list))),
-            "orchestrator:plan" => Text(Plan),
-            "orchestrator:followup" => Text(new ResearchPlan([])),   // the replay's first plan already covered every source
-            _ when stage.StartsWith("worker:") => Text(Worker(stage["worker:".Length..])),
-            "orchestrator:synthesize" => Text(Synthesize(list.Any(m => m.Text.Contains("EVALUATOR FEEDBACK")))),
-            "evaluator" => Text(new Evaluation(true, [])),
-            "executor" => Executor(list),
+            StageName.Router => Text(Router(Last(list))),
+            StageName.OrchestratorPlan => Text(Plan),
+            StageName.OrchestratorFollowUp => Text(new ResearchPlan([])),   // the replay's first plan already covered every source
+            _ when StageName.WorkerSource(stage) is { } source => Text(Worker(source)),
+            StageName.OrchestratorSynthesize => Text(Synthesize(list.Any(m => m.Text.Contains(Patterns.Orchestrator.FeedbackHeading)))),
+            StageName.Evaluator => Text(new Evaluation(true, [])),
+            StageName.Executor => Executor(list),
             _ => new ChatMessage(ChatRole.Assistant, $"(scripted client has no response for stage '{stage}')"),
         };
 
@@ -49,31 +49,31 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
     {
         var t = text.ToLowerInvariant();
         if (new[] { "refund", "money back", "charged", "charge", "cancel" }.Any(t.Contains))
-            return new("billing", 0.93, "Customer asks for a refund and to avoid a charge on a second order.");
+            return new(RouteCategory.Billing, 0.93, "Customer asks for a refund and to avoid a charge on a second order.");
         if (new[] { "how do i", "set up", "setup", "repair", "fix" }.Any(t.Contains))
-            return new("technical", 0.81, "Customer needs help using or repairing a product.");
+            return new(RouteCategory.Technical, 0.81, "Customer needs help using or repairing a product.");
         if (new[] { "shipping", "hours", "do you sell", "in stock" }.Any(t.Contains))
-            return new("general", 0.77, "General store question.");
-        return new("unknown", 0.31, "Request does not match a support category.");
+            return new(RouteCategory.General, 0.77, "General store question.");
+        return new(RouteCategory.Unknown, 0.31, "Request does not match a support category.");
     }
 
     private static readonly ResearchPlan Plan = new(
     [
-        new("r1", "Is a tent whose pole snapped on its first use, delivered 3 weeks ago, covered, and can the customer get a refund?", "warranty"),
-        new("r2", "Can a used tent be returned for a refund within 30 days of delivery?", "returns"),
-        new("r3", "Can an unshipped backordered item be cancelled, and is the charge refunded?", "backorders"),
-        new("r4", "Is a Summit 2 replacement pole set in stock right now?", "inventory"),
+        new("r1", "Is a tent whose pole snapped on its first use, delivered 3 weeks ago, covered, and can the customer get a refund?", KnowledgeSourceId.Warranty),
+        new("r2", "Can a used tent be returned for a refund within 30 days of delivery?", KnowledgeSourceId.Returns),
+        new("r3", "Can an unshipped backordered item be cancelled, and is the charge refunded?", KnowledgeSourceId.Backorders),
+        new("r4", "Is a Summit 2 replacement pole set in stock right now?", KnowledgeSourceId.Inventory),
     ]);
 
     private static WorkerOutput Worker(string source) => source switch
     {
-        "warranty" => new("Yes. A pole breaking during normal use counts as a manufacturing defect, and if the replacement part is out of stock the full price is refunded to the original payment method.",
+        KnowledgeSourceId.Warranty => new("Yes. A pole breaking during normal use counts as a manufacturing defect, and if the replacement part is out of stock the full price is refunded to the original payment method.",
             "Structural failure during normal use, including a broken tent pole, is treated as a manufacturing defect.", true),
-        "returns" => new("No. The tent has been used, so it is not returnable under the returns policy; defects go through the warranty policy.",
+        KnowledgeSourceId.Returns => new("No. The tent has been used, so it is not returnable under the returns policy; defects go through the warranty policy.",
             "Items that have been used are not eligible for return under this policy; see the warranty policy for defects.", false),
-        "backorders" => new("Yes. An unshipped backordered item can be cancelled at any time and the full charge is refunded.",
+        KnowledgeSourceId.Backorders => new("Yes. An unshipped backordered item can be cancelled at any time and the full charge is refunded.",
             "The customer may cancel a backordered item at any time before it ships, and the full charge is refunded to the original payment method within 3-5 business days.", true),
-        "inventory" => new("No. Summit 2 replacement poles are out of stock until January 15, so a replacement cannot be sent now.",
+        KnowledgeSourceId.Inventory => new("No. Summit 2 replacement poles are out of stock until January 15, so a replacement cannot be sent now.",
             "Summit 2 replacement pole set: out of stock, expected restock January 15.", true),
         _ => new("The source does not answer this question.", "", false),
     };
@@ -81,9 +81,9 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
     private static Proposal Synthesize(bool revised)
     {
         var tent = new ProposedAction(ActionKind.Refund, "1042", 34900,
-            "Pole failure on first use is a covered defect and replacement poles are out of stock, so the warranty allows a full refund.", "warranty");
+            "Pole failure on first use is a covered defect and replacement poles are out of stock, so the warranty allows a full refund.", KnowledgeSourceId.Warranty);
         var stakes = new ProposedAction(ActionKind.CancelBackorder, "1057", 3900,
-            "Stakes are backordered and unshipped; the customer may cancel for a full refund.", "backorders");
+            "Stakes are backordered and unshipped; the customer may cancel for a full refund.", KnowledgeSourceId.Backorders);
 
         return revised
             ? new("Refund the defective Summit 2 tent under warranty and cancel the unshipped stakes backorder.",
@@ -104,7 +104,8 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
     private ChatMessage Executor(List<ChatMessage> history)
     {
         var first = history.First(m => m.Role == ChatRole.User).Text;
-        var plan = JsonSerializer.Deserialize<List<ApprovedAction>>(Between(first, "<approved_plan>", "</approved_plan>"), Json.Options)!;
+        const string tag = Patterns.Executor.PlanTag;
+        var plan = JsonSerializer.Deserialize<List<ApprovedAction>>(Between(first, $"<{tag}>", $"</{tag}>"), Json.Options)!;
 
         var calls = history.SelectMany(m => m.Contents).OfType<FunctionCallContent>().ToList();
         var results = history.SelectMany(m => m.Contents).OfType<FunctionResultContent>()
@@ -115,10 +116,10 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
         foreach (var step in plan)
         {
             var a = step.Action;
-            if (!calls.Any(c => c.Name == "get_order" && Arg(c, "orderId") == a.OrderId))
-                return Call("get_order", new() { ["orderId"] = a.OrderId });
+            if (!calls.Any(c => c.Name == ToolName.GetOrder && Arg(c, "orderId") == a.OrderId))
+                return Call(ToolName.GetOrder, new() { ["orderId"] = a.OrderId });
 
-            var effectName = a.Type == ActionKind.Refund ? "issue_refund" : "cancel_backorder";
+            var effectName = a.Type == ActionKind.Refund ? ToolName.IssueRefund : ToolName.CancelBackorder;
             var effectArgs = a.Type == ActionKind.Refund
                 ? new Dictionary<string, object?> { ["orderId"] = a.OrderId, ["amountCents"] = a.AmountCents, ["idempotencyKey"] = step.IdempotencyKey }
                 : new Dictionary<string, object?> { ["orderId"] = a.OrderId, ["idempotencyKey"] = step.IdempotencyKey };
@@ -130,22 +131,22 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
 
             var lastEffect = effects[^1];
             var lastResult = results.GetValueOrDefault(lastEffect.c.CallId, "");
-            if (lastResult.StartsWith("TIMEOUT"))
+            if (ToolOutcome.Of(lastResult) == ToolOutcome.Timeout)
             {
-                var check = keyed.LastOrDefault(x => x.c.Name == "get_payment_status" && x.i > lastEffect.i);
+                var check = keyed.LastOrDefault(x => x.c.Name == ToolName.GetPaymentStatus && x.i > lastEffect.i);
                 if (check.c is null)
-                    return Call("get_payment_status", new() { ["idempotencyKey"] = step.IdempotencyKey });
-                if (!results.GetValueOrDefault(check.c.CallId, "").StartsWith("completed"))
+                    return Call(ToolName.GetPaymentStatus, new() { ["idempotencyKey"] = step.IdempotencyKey });
+                if (ToolOutcome.Of(results.GetValueOrDefault(check.c.CallId, "")) != ToolOutcome.Completed)
                     return Call(effectName, effectArgs);   // safe: same key
             }
         }
 
-        if (!calls.Any(c => c.Name == "send_customer_message"))
-            return Call("send_customer_message", []);
+        if (!calls.Any(c => c.Name == ToolName.SendCustomerMessage))
+            return Call(ToolName.SendCustomerMessage, []);
 
         return new ChatMessage(ChatRole.Assistant,
             $"All {plan.Count} approved actions are complete and the customer reply was sent." +
-            (results.Values.Any(r => r.StartsWith("TIMEOUT")) ? " One refund timed out; its status check showed it had already completed, so it was not repeated." : ""));
+            (results.Values.Any(r => ToolOutcome.Of(r) == ToolOutcome.Timeout) ? " One refund timed out; its status check showed it had already completed, so it was not repeated." : ""));
     }
 
     // ----- helpers ----------------------------------------------------------------------

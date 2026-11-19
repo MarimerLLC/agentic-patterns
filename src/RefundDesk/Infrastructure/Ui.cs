@@ -46,8 +46,7 @@ public static class Ui
             .AddColumn(new TableColumn("Tool calls").RightAligned())
             .AddColumn(new TableColumn("Model time").RightAligned());
 
-        string[] order = ["router", "orchestrator", "worker", "evaluator", "executor"];
-        foreach (var (stage, s) in meter.Stages.OrderBy(kv => Array.IndexOf(order, kv.Key) is var i && i < 0 ? 99 : i))
+        foreach (var (stage, s) in meter.Stages.OrderBy(kv => StageName.Groups.IndexOf(kv.Key) is var i && i < 0 ? 99 : i))
             table.AddRow(E(stage), $"{s.ModelCalls}", $"{s.InputTokens:N0}", $"{s.OutputTokens:N0}", $"{s.ToolCalls}", $"{s.ElapsedMs / 1000.0:F1}s");
 
         var all = meter.Stages.Values;

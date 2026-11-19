@@ -14,14 +14,14 @@ public record Order(
     string CustomerId,
     string Item,
     int AmountCents,
-    string Status,              // Delivered | Backordered | Refunded | Cancelled
+    string Status,              // an OrderStatus value
     DateOnly OrderedOn,
     DateOnly? DeliveredOn,
     string PaymentMethod);
 
 // ② Router output
 public record RouteDecision(
-    [property: Description("One of: billing, technical, general, unknown")] string Category,
+    [property: Description($"One of: {RouteCategory.Billing}, {RouteCategory.Technical}, {RouteCategory.General}, {RouteCategory.Unknown}")] string Category,
     [property: Description("0.0 to 1.0: how sure you are of the category")] double Confidence,
     [property: Description("One sentence explaining the choice")] string Rationale);
 
@@ -65,13 +65,13 @@ public record Proposal(
     [property: Description("Anything assumed rather than verified")] List<string> Assumptions);
 
 // ⑥ Evaluator output
-public record Evaluation(bool Pass, List<string> Issues, string Kind = "model");
+public record Evaluation(bool Pass, List<string> Issues, string Kind = EvaluationKind.Model);
 
 // ⑧ Human decision
 public record ApprovedAction(ProposedAction Action, string IdempotencyKey);
 
 public record Approval(
-    string Decision,            // approved | rejected
+    string Decision,            // an ApprovalDecision value
     string Approver,
     DateTimeOffset At,
     List<ApprovedAction> Actions,
