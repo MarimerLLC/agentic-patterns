@@ -102,9 +102,9 @@ AnsiConsole.Write(new Panel(Ui.E(string.Join(' ', task.Request.Text.Split((char[
 // ---- ② Router --------------------------------------------------------------------------
 Ui.StageHeader("②", "Router", "One cheap classification call. Abstains when unsure; authorization is not the classifier's job.");
 using (Telemetry.Source.StartActivity("② route + ⑦ handoff"))
-if (!task.Reached("routed"))
+if (!task.Reached(TaskPhase.Routed))
 {
-    Doing("routing");
+    Doing(TaskActivity.Routing);
     (task.Route, task.RoutedBy) = await Ui.Spin("classifying request...", () => new Router(model, decision).ClassifyAsync(task.Request));
 
     // ⑦ Specialist handoff: deterministic facts + capabilities travel with the task.
@@ -112,22 +112,22 @@ if (!task.Reached("routed"))
     task.Orders = orderIds.Select(orderBook.Find).OfType<Order>().Where(o => o.CustomerId == task.Request.CustomerId).ToList();
     task.Handoff = new HandoffPackage(task.Id, "triage-router", $"{task.Route.Category}-specialist",
         task.Route.Rationale, orderIds, Router.CapabilitiesFor(task.Route.Category));
-    task.Status = "routed";
+    task.Status = TaskPhase.Routed;
     Save();
 }
 else Ui.Resumed($"route = {task.Route!.Category}");
 
-var routeColor = task.Route!.Category == "unknown" ? "red" : "green";
+var routeColor = task.Route!.Category == RouteCategory.Unknown ? "red" : "green";
 AnsiConsole.MarkupLine($"  route: [bold {routeColor}]{task.Route.Category}[/]  confidence: {task.Route.Confidence:0.00} " +
                        $"[grey](floor {Router.ConfidenceFloor:0.0})[/]  [grey]{Ui.E(task.Route.Rationale)}[/]");
 if (task.RoutedBy is not null) AnsiConsole.MarkupLine($"  [grey]decided by:[/] {Ui.E(task.RoutedBy)}");
 
-if (task.Route.Category != "billing")
+if (task.Route.Category != RouteCategory.Billing)
 {
-    var where = task.Route.Category == "unknown" ? "the human support queue (no route fits)" : $"the {task.Route.Category} specialist (not built in this demo)";
+    var where = task.Route.Category == RouteCategory.Unknown ? "the human support queue (no route fits)" : $"the {task.Route.Category} specialist (not built in this demo)";
     task.Outcome = $"handed off to {where}";
     root?.SetTag("refunddesk.outcome", task.Outcome);
-    Doing("done");
+    Doing(TaskActivity.Done);
     Ui.Warn($"Handed off to {where}. Nothing else runs; tools granted: {(task.Handoff!.Capabilities.Count == 0 ? "none" : string.Join(", ", task.Handoff.Capabilities))}.");
     Ui.Economics(meter, scripted, wall.Elapsed);
     return;
@@ -147,16 +147,16 @@ AnsiConsole.Write(handoffTable);
 Ui.StageHeader("⑤ + ③", "Orchestrator-workers with parallel fan-out", $"The lead decides what to research at runtime (max {Orchestrator.MaxWorkers} workers); workers run in parallel.");
 var orchestrator = new Orchestrator(model);
 using (Telemetry.Source.StartActivity("⑤ + ③ research"))
-if (!task.Reached("researched"))
+if (!task.Reached(TaskPhase.Researched))
 {
-    Doing("planning research");
+    Doing(TaskActivity.Planning);
     task.Plan = await Ui.Spin("lead is planning research...", () => orchestrator.PlanAsync(task.Request, task.Orders));
     foreach (var s in task.Plan.Subtasks)
         AnsiConsole.MarkupLine($"  [bold]{Ui.E(s.Id)}[/] [blue]{Ui.E(s.Source),-10}[/] {Ui.E(s.Question)}");
-    Doing($"researching: {task.Plan.Subtasks.Count} workers in parallel");
+    Doing($"{TaskActivity.Researching}: {task.Plan.Subtasks.Count} workers in parallel");
 
     task.Findings = await Ui.Spin($"{task.Plan.Subtasks.Count} workers researching in parallel...", () => orchestrator.ResearchAsync(task.Plan));
-    task.Status = "researched";
+    task.Status = TaskPhase.Researched;
     Save();
 }
 else Ui.Resumed($"{task.Findings.Count} findings");
@@ -172,14 +172,14 @@ AnsiConsole.Write(findingsTable);
 Ui.StageHeader("⑥", "Evaluator-optimizer", $"Deterministic checks first, then a model rubric. Revise up to {Evaluator.MaxRounds} rounds, then escalate.");
 var evaluator = new Evaluator(model);
 using (Telemetry.Source.StartActivity("⑥ evaluate + revise"))
-if (!task.Reached("evaluated"))
+if (!task.Reached(TaskPhase.Evaluated))
 {
     Evaluation? feedback = null;
     for (var round = 1; round <= Evaluator.MaxRounds; round++)
     {
         using var roundSpan = Telemetry.Source.StartActivity($"round {round}");
         meter.EvaluatorRounds = round;
-        Doing($"drafting round {round}");
+        Doing($"{TaskActivity.Drafting} round {round}");
         var draft = await Ui.Spin(round == 1 ? "lead is drafting a resolution..." : $"lead is revising (round {round})...",
             () => orchestrator.SynthesizeAsync(task.Request, task.Orders, task.Findings, feedback, task.Proposal));
         task.Drafts.Add(draft);
@@ -190,7 +190,7 @@ if (!task.Reached("evaluated"))
         if (verdict.Pass)
         {
             Ui.Ok("deterministic checks passed (coverage, amounts, ownership, order state, cited evidence)");
-            Doing($"evaluating round {round}: rubric");
+            Doing($"{TaskActivity.Evaluating} round {round}: rubric");
             verdict = await Ui.Spin("evaluator applying rubric...", () => evaluator.CheckRubricAsync(task.Request, task.Orders, task.Findings, draft));
         }
         task.Evaluations.Add(verdict);
@@ -206,14 +206,14 @@ if (!task.Reached("evaluated"))
         // ⑤ adaptive: if the gap is missing evidence, the lead can send workers back out.
         if (round < Evaluator.MaxRounds)
         {
-            Doing("follow-up: lead deciding");
+            Doing($"{TaskActivity.FollowUp}: lead deciding");
             var more = await Ui.Spin("lead deciding whether more research would help...",
                 () => orchestrator.FollowUpAsync(task.Request, task.Orders, task.Findings, verdict));
             if (more.Subtasks.Count > 0)
             {
                 foreach (var s in more.Subtasks)
                     AnsiConsole.MarkupLine($"  [bold]{Ui.E(s.Id)}[/] [blue]{Ui.E(s.Source),-10}[/] {Ui.E(s.Question)} [grey](follow-up)[/]");
-                Doing($"follow-up: researching {string.Join(", ", more.Subtasks.Select(s => s.Source))}");
+                Doing($"{TaskActivity.FollowUp}: researching {string.Join(", ", more.Subtasks.Select(s => s.Source))}");
                 var extra = await Ui.Spin($"{more.Subtasks.Count} follow-up worker(s) researching...", () => orchestrator.ResearchAsync(more));
                 foreach (var f in extra)
                     AnsiConsole.MarkupLine($"  [blue]{Ui.E(f.Source)}[/] {Ui.E(f.Answer)} {(f.QuoteVerified ? "[green]✓ verified[/]" : "[red]✗ quote not found[/]")}");
@@ -222,23 +222,23 @@ if (!task.Reached("evaluated"))
             }
         }
     }
-    task.Status = "evaluated";
+    task.Status = TaskPhase.Evaluated;
     Save();
 }
 else Ui.Resumed($"{task.Drafts.Count} draft(s), last evaluation {(task.Evaluations.LastOrDefault()?.Pass == true ? "passed" : "failed")}");
 
 // ---- ⑧ Human checkpoint -----------------------------------------------------------------
 Ui.StageHeader("⑧", "Human checkpoint", "Part of the architecture, not an exception handler. The approval binds what the executor may do.");
-if (task.Approval is { Decision: "rejected" })
+if (task.Approval is { Decision: ApprovalDecision.Rejected })
 {
     Ui.Warn($"Rejected by {task.Approval.Approver} at {task.Approval.At:t}; task is in the supervisor queue.");
     return;
 }
 using (var checkpointSpan = Telemetry.Source.StartActivity("⑧ human checkpoint"))
-if (!task.Reached("approved"))
+if (!task.Reached(TaskPhase.Approved))
 {
     var unresolved = task.Evaluations.LastOrDefault() is { Pass: false } last ? new List<Evaluation> { last } : [];
-    Doing("awaiting approval");
+    Doing(TaskActivity.AwaitingApproval);
     HumanCheckpoint.ShowPreview(task, unresolved);
     var choice = HumanCheckpoint.Ask(cli.AutoApprove);
     meter.HumanInterventions++;
@@ -247,7 +247,7 @@ if (!task.Reached("approved"))
 
     if (choice == HumanCheckpoint.Choice.Pause)
     {
-        Doing("paused for a human");
+        Doing(TaskActivity.Paused);
         AnsiConsole.MarkupLine($"\n[blue]Paused.[/] Everything so far is in [bold]{Ui.E(store.PathFor(task.Id))}[/]");
         AnsiConsole.MarkupLine($"Resume with: [bold]dotnet run -- --resume {task.Id}[/]");
         return;
@@ -257,11 +257,11 @@ if (!task.Reached("approved"))
     if (choice == HumanCheckpoint.Choice.Reject)
     {
         task.Outcome = "rejected; sent to supervisor queue";
-        Doing("done");
+        Doing(TaskActivity.Done);
         Ui.Warn("Rejected. Nothing was executed.");
         return;
     }
-    task.Status = "approved";
+    task.Status = TaskPhase.Approved;
     Save();
 }
 else Ui.Resumed($"approved by {task.Approval!.Approver} at {task.Approval.At:t}");
@@ -270,22 +270,22 @@ foreach (var a in task.Approval!.Actions)
 
 // ---- ④ Tool-use loop --------------------------------------------------------------------
 Ui.StageHeader("④", "Tool-use loop", $"Model chooses each step. Budgets: {Executor.MaxIterations} iterations, {Executor.MaxToolCalls} tool calls, {Executor.TimeBudget.TotalMinutes:0} min. Effects are idempotent.");
-if (!task.Reached("executed"))
+if (!task.Reached(TaskPhase.Executed))
 {
     root?.AddEvent(new ActivityEvent("approved actions handed to the tool-use loop"));
-    Doing("executing approved actions");
+    Doing(TaskActivity.Executing);
     var tools = new BillingTools(orderBook, payments, outbox, task.Approval, task.Request.CustomerId, ReplyKey(task.Id), meter);
     var stopReason = await new Executor(model, tools, meter).RunAsync(task.Approval, task.Handoff!.Capabilities, task.ExecutionLog, onStep: Save);
     task.Outcome = stopReason;
     root?.SetTag("refunddesk.outcome", stopReason);
-    task.Status = "executed";
+    task.Status = TaskPhase.Executed;
     Save();
 }
 else Ui.Resumed($"executed ({task.Outcome})");
 
 // ---- Verify by reading back the system of record -----------------------------------------
 Ui.StageHeader("✓", "Verify", "Don't trust the agent's summary: read the payment ledger and outbox back and compare them to the approval.");
-Doing("verifying: reading the ledger back");
+Doing($"{TaskActivity.Verifying}: reading the ledger back");
 var verified = true;
 foreach (var a in task.Approval.Actions)
 {
@@ -310,7 +310,7 @@ else
     Ui.Fail($"expected one approved customer reply, found {replies.Count}");
 }
 task.Verified = verified;
-Doing("done");
+Doing(TaskActivity.Done);
 
 Ui.Economics(meter, scripted, wall.Elapsed);
 AnsiConsole.MarkupLine($"[grey]Task record:[/] {Ui.E(store.PathFor(task.Id))}");

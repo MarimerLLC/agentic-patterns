@@ -100,7 +100,7 @@ public static class LlmFactory
 public static class Stage
 {
     private static readonly AsyncLocal<string?> CurrentName = new();
-    public static string Current => CurrentName.Value ?? "unscoped";
+    public static string Current => CurrentName.Value ?? StageName.Unscoped;
 
     public static IDisposable Enter(string name)
     {
@@ -141,7 +141,7 @@ public sealed class Meter
     public int EffectRetries;
     public int LoopIterations;
 
-    private StageStats For(string stage) => Stages.GetOrAdd(stage.Split(':')[0], _ => new StageStats());
+    private StageStats For(string stage) => Stages.GetOrAdd(StageName.Group(stage), _ => new StageStats());
 
     public void ModelCall(string stage, UsageDetails? usage, TimeSpan elapsed)
     {

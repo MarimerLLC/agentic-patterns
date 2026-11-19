@@ -12,7 +12,8 @@ public sealed class TaskRecord
 {
     public required string Id { get; init; }
     public required CustomerRequest Request { get; init; }
-    public string Status { get; set; } = "new";
+    /// <summary>The last <see cref="TaskPhase"/> completed.</summary>
+    public string Status { get; set; } = TaskPhase.New;
     public DateTimeOffset Created { get; init; } = DateTimeOffset.Now;
     public DateTimeOffset Updated { get; set; } = DateTimeOffset.Now;
 
@@ -36,11 +37,9 @@ public sealed class TaskRecord
 
     public Proposal? Proposal => Drafts.LastOrDefault();
 
-    private static readonly string[] Order = ["new", "routed", "researched", "evaluated", "approved", "executed"];
-
-    /// <summary>True once the task has passed the given stage.</summary>
-    public bool Reached(string status) =>
-        Array.IndexOf(Order, Status) >= Array.IndexOf(Order, status) && Array.IndexOf(Order, status) >= 0;
+    /// <summary>True once the task has passed the given <see cref="TaskPhase"/>.</summary>
+    public bool Reached(string phase) =>
+        TaskPhase.Order.IndexOf(Status) >= TaskPhase.Order.IndexOf(phase) && TaskPhase.Order.IndexOf(phase) >= 0;
 }
 
 public sealed class TaskStore(string dataDir)

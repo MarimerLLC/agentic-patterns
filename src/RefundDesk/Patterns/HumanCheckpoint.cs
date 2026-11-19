@@ -77,7 +77,7 @@ public static class HumanCheckpoint
         var actions = task.Proposal!.Actions
             .Select((a, i) => new ApprovedAction(a, $"{task.Id}:{i + 1}:{a.Type}:{a.OrderId}"))
             .ToList();
-        return new Approval(choice == Choice.Approve ? "approved" : "rejected", approver, DateTimeOffset.Now,
+        return new Approval(choice == Choice.Approve ? ApprovalDecision.Approved : ApprovalDecision.Rejected, approver, DateTimeOffset.Now,
             choice == Choice.Approve ? actions : [], task.Proposal.CustomerReply, null);
     }
 }

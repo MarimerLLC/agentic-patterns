@@ -34,21 +34,21 @@ public sealed class Evaluator(ModelGateway model)
             if (order.CustomerId != request.CustomerId) issues.Add($"Order #{order.Id} belongs to a different customer.");
             if (a.AmountCents <= 0 || a.AmountCents > order.AmountCents)
                 issues.Add($"Amount {Ui.Money(a.AmountCents)} on #{order.Id} is outside 0..{Ui.Money(order.AmountCents)}.");
-            if (a.Type == ActionKind.Refund && order.Status != "Delivered") issues.Add($"#{order.Id} is {order.Status}; '{ActionKind.Refund}' needs Delivered.");
-            if (a.Type == ActionKind.CancelBackorder && order.Status != "Backordered") issues.Add($"#{order.Id} is {order.Status}; cancel needs Backordered.");
+            if (a.Type == ActionKind.Refund && order.Status != OrderStatus.Delivered) issues.Add($"#{order.Id} is {order.Status}; '{ActionKind.Refund}' needs {OrderStatus.Delivered}.");
+            if (a.Type == ActionKind.CancelBackorder && order.Status != OrderStatus.Backordered) issues.Add($"#{order.Id} is {order.Status}; cancel needs {OrderStatus.Backordered}.");
             if (a.Type is not (ActionKind.Refund or ActionKind.CancelBackorder)) issues.Add($"Unknown action type '{a.Type}'.");
             if (!supported.Contains(a.PolicySource)) issues.Add($"Action on #{order.Id} cites '{a.PolicySource}', which has no verified evidence.");
         }
 
         if (proposal.Actions.GroupBy(a => a.OrderId).Any(g => g.Count() > 1)) issues.Add("More than one action on the same order.");
-        return new Evaluation(issues.Count == 0, issues, "deterministic");
+        return new Evaluation(issues.Count == 0, issues, EvaluationKind.Deterministic);
     }
 
     public async Task<Evaluation> CheckRubricAsync(
         CustomerRequest request, IReadOnlyList<Order> orders, IReadOnlyList<Finding> findings, Proposal proposal,
         CancellationToken ct = default)
     {
-        using var _ = Stage.Enter("evaluator");
+        using var _ = Stage.Enter(StageName.Evaluator);
         var system = """
             You are a strict QA reviewer for customer-support resolutions. Grade the proposal
             against this rubric and list every concrete issue:
@@ -73,6 +73,6 @@ public sealed class Evaluator(ModelGateway model)
             </proposal>
             """;
         var result = await model.AskAsync<Evaluation>(system, user, ct);
-        return result with { Kind = "model" };
+        return result with { Kind = EvaluationKind.Model };
     }
 }

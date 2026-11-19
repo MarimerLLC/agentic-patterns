@@ -71,13 +71,13 @@ public static class Telemetry
     /// <summary>Display name in the trace for each pipeline stage, labelled with the talk's pattern number.</summary>
     public static string SpanName(string stage) => stage switch
     {
-        "router" => "② router: classify",
-        "orchestrator:plan" => "⑤ orchestrator: plan",
-        "orchestrator:synthesize" => "⑤ orchestrator: synthesize",
-        "orchestrator:followup" => "⑤ orchestrator: follow-up research",
-        "evaluator" => "⑥ evaluator: rubric",
-        "executor" => "④ tool-use loop",
-        _ when stage.StartsWith("worker:") => $"③ worker: {stage["worker:".Length..]}",
+        StageName.Router => "② router: classify",
+        StageName.OrchestratorPlan => "⑤ orchestrator: plan",
+        StageName.OrchestratorSynthesize => "⑤ orchestrator: synthesize",
+        StageName.OrchestratorFollowUp => "⑤ orchestrator: follow-up research",
+        StageName.Evaluator => "⑥ evaluator: rubric",
+        StageName.Executor => "④ tool-use loop",
+        _ when StageName.WorkerSource(stage) is { } source => $"③ worker: {source}",
         _ => stage,
     };
 
