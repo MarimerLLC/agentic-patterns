@@ -33,7 +33,8 @@ public sealed class Executor(ModelGateway model, BillingTools tools, Meter meter
             summary and no tool calls.
         """;
 
-    public async Task<string> RunAsync(Approval approval, IReadOnlyList<string> capabilities, List<string> log, CancellationToken ct = default)
+    public async Task<string> RunAsync(Approval approval, IReadOnlyList<string> capabilities, List<string> log,
+        Action? onStep = null, CancellationToken ct = default)
     {
         using var _ = Stage.Enter("executor");
 
@@ -69,6 +70,7 @@ public sealed class Executor(ModelGateway model, BillingTools tools, Meter meter
             {
                 AnsiConsole.MarkupLine($"[grey]  {iteration,2}[/] [green]model finished[/]: {Ui.E(response.Text.Trim())}");
                 log.Add($"finished: {response.Text.Trim()}");
+                onStep?.Invoke();
                 return "goal met";
             }
 
@@ -97,6 +99,7 @@ public sealed class Executor(ModelGateway model, BillingTools tools, Meter meter
                 AnsiConsole.MarkupLine($"[grey]  {iteration,2}[/] [bold]{Ui.E(call.Name)}[/]([grey]{Ui.E(Shorten(args, 90))}[/])");
                 AnsiConsole.MarkupLine($"       [{color}]→ {Ui.E(Shorten(result, 140))}[/]");
                 log.Add($"{call.Name}({args}) -> {result}");
+                onStep?.Invoke();   // persist each step: durable progress, and the --watch view updates live
                 toolSpan?.SetTag("refunddesk.tool.arguments", args);
                 toolSpan?.SetTag("refunddesk.tool.result", result);
                 if (result.StartsWith("TIMEOUT") || result.StartsWith("DENIED") || result.StartsWith("ERROR"))

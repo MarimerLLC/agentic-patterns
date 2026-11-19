@@ -50,6 +50,17 @@ dotnet run                       # scripted replay unless a key is configured (s
 | `--fast` | No simulated think time in scripted mode |
 | `--reset` | Delete `.data/` (task records, the payment ledger and the message outbox) |
 | `--otel` | Send OpenTelemetry traces and metrics over OTLP (see below). Off by default |
+| `--viz` | Open the live flow view in a Windows Terminal pane on the right (once; it follows later runs) |
+| `--watch` | Run the flow view yourself, in any terminal: `dotnet run --no-build -- --watch` |
+
+### Live flow view (optional)
+
+`--watch` is a separate, read-only process that draws the composed flow from the durable task
+record and redraws as the record changes: ② route → ⑦ handoff → ⑤ plan with the ③ workers
+running side by side → ⑥ evaluator rounds (and follow-up research) → ⑧ waiting for a person →
+④ each tool call (`refund #1042 ⚠ TIMEOUT`, `status? ✓ completed`) → verify. It never talks to the
+agent; it reads the same file `--resume` reads, which is the point of ⑨. `--viz` opens it in a
+right-hand Windows Terminal pane; it stays open and switches to the newest task on later runs.
 
 ### Watching it in the Aspire dashboard (optional)
 
@@ -115,7 +126,7 @@ draft deliberately leaves out order #1057, so the evaluator always has something
 ## Demo script (about 12–15 minutes)
 
 1. **Happy path with the chaos switch**
-   `dotnet run -- --reset --chaos`
+   `dotnet run -- --reset --chaos --viz` (`--viz` only on the first run; the pane stays open)
    - ② Router: point out the confidence and the floor. Capabilities are granted by code. With
      Decision-1 configured, "decided by" shows a decision model, not an LLM: real probabilities,
      1 output token, about 0.5 s (compare the router row in the economics table).
@@ -126,7 +137,9 @@ draft deliberately leaves out order #1057, so the evaluator always has something
      follow-up worker to inventory before revising (⑤ adapting at runtime). Live models
      sometimes get it right first time, which is fine.
    - ⑧ Checkpoint: compare it with "Allow agent?". Choose **Pause**.
-2. **Durability.** Open `.data/tasks/T-*.json` in the editor and show that this file is the memory.
+2. **Durability.** After Pause, the flow pane still shows `⏸ waiting for a person`: the main
+   process has exited, and the pane is drawn only from the task record. Open
+   `.data/tasks/T-*.json` in the editor and show that this file is the memory.
    Then run `dotnet run -- --resume --chaos` and approve.
 3. **Ambiguous side effect.** The first refund returns `TIMEOUT`. The agent checks
    `get_payment_status` with the same idempotency key rather than paying again.

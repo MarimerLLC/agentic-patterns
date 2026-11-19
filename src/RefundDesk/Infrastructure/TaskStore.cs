@@ -27,6 +27,10 @@ public sealed class TaskRecord
     public Approval? Approval { get; set; }
     public List<string> ExecutionLog { get; set; } = [];
     public string? Outcome { get; set; }
+    /// <summary>What the run is doing right now (read by the --watch flow view).</summary>
+    public string? Activity { get; set; }
+    /// <summary>Result of the ledger/outbox read-back; null until verified.</summary>
+    public bool? Verified { get; set; }
     /// <summary>OpenTelemetry root span of each run of this task, so a resumed run's trace links to the earlier ones.</summary>
     public List<string> Traces { get; set; } = [];
 
