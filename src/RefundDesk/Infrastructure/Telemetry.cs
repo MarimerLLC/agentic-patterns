@@ -74,6 +74,7 @@ public static class Telemetry
         "router" => "② router: classify",
         "orchestrator:plan" => "⑤ orchestrator: plan",
         "orchestrator:synthesize" => "⑤ orchestrator: synthesize",
+        "orchestrator:followup" => "⑤ orchestrator: follow-up research",
         "evaluator" => "⑥ evaluator: rubric",
         "executor" => "④ tool-use loop",
         _ when stage.StartsWith("worker:") => $"③ worker: {stage["worker:".Length..]}",

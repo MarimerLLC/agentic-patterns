@@ -17,6 +17,7 @@ public sealed class TaskRecord
     public DateTimeOffset Updated { get; set; } = DateTimeOffset.Now;
 
     public RouteDecision? Route { get; set; }
+    public string? RoutedBy { get; set; }
     public HandoffPackage? Handoff { get; set; }
     public List<Order> Orders { get; set; } = [];
     public ResearchPlan? Plan { get; set; }

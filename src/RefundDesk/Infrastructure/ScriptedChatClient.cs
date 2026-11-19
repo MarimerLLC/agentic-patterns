@@ -28,6 +28,7 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
         {
             "router" => Text(Router(Last(list))),
             "orchestrator:plan" => Text(Plan),
+            "orchestrator:followup" => Text(new ResearchPlan([])),   // the replay's first plan already covered every source
             _ when stage.StartsWith("worker:") => Text(Worker(stage["worker:".Length..])),
             "orchestrator:synthesize" => Text(Synthesize(list.Any(m => m.Text.Contains("EVALUATOR FEEDBACK")))),
             "evaluator" => Text(new Evaluation(true, [])),

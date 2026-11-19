@@ -63,15 +63,33 @@ public static class LlmFactory
             {
                 var model = s.Model ?? throw new InvalidOperationException("Llm:Model is required for the openai provider.");
                 var options = new OpenAIClientOptions();
-                if (!string.IsNullOrWhiteSpace(s.Endpoint)) options.Endpoint = new Uri(s.Endpoint);
+                var endpoint = NormalizeEndpoint(s.Endpoint);
+                if (endpoint is not null) options.Endpoint = endpoint;
                 var client = new OpenAIClient(new ApiKeyCredential(s.ApiKey ?? "unused"), options);
-                return (client.GetChatClient(model).AsIChatClient(), $"OpenAI-compatible · {model} @ {s.Endpoint ?? "api.openai.com"}", false);
+                return (client.GetChatClient(model).AsIChatClient(), $"OpenAI-compatible · {model} @ {endpoint?.Host ?? "api.openai.com"}", false);
             }
             case "scripted":
                 return (new ScriptedChatClient(s.ScriptedDelayMs), "Scripted replay (offline, no model)", true);
             default:
                 throw new InvalidOperationException($"Unknown Llm:Provider '{s.Provider}'.");
         }
+    }
+
+    /// <summary>
+    /// Azure OpenAI / Foundry resources serve the OpenAI-compatible API under /openai/v1/.
+    /// Accept the bare resource URL (as shown in the portal) and add that path; any other
+    /// endpoint (OpenAI, Ollama, vLLM...) is used as given.
+    /// </summary>
+    public static Uri? NormalizeEndpoint(string? endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint)) return null;
+        var uri = new Uri(endpoint.Trim());
+        var azure = uri.Host.EndsWith(".openai.azure.com", StringComparison.OrdinalIgnoreCase)
+                 || uri.Host.EndsWith(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase)
+                 || uri.Host.EndsWith(".cognitiveservices.azure.com", StringComparison.OrdinalIgnoreCase);
+        return azure && !uri.AbsolutePath.StartsWith("/openai/v1", StringComparison.OrdinalIgnoreCase)
+            ? new Uri(uri, "/openai/v1/")
+            : uri;
     }
 }
 

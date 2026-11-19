@@ -18,7 +18,7 @@ avoid being charged for a backordered stakes order (#1057).
 | # | Pattern | Where | What to point at |
 |---|---------|-------|------------------|
 | ① | Prompt chain | `Program.cs` | Each stage hands a typed record to the next; gates between stages |
-| ② | Router | `Patterns/Router.cs` | Confidence floor → `unknown`; capabilities come from code, not the classifier; order ids come from a regex, not a model |
+| ② | Router | `Patterns/Router.cs` | Optional decision model (Microsoft-Decision-1: calibrated probabilities, 1 output token) instead of an LLM; confidence floor → `unknown`; capabilities come from code, not the classifier; order ids come from a regex, not a model |
 | ③ | Parallel fan-out | `Orchestrator.ResearchAsync` | `Task.WhenAll` over workers; each quote is checked against the source in code |
 | ④ | Tool-use loop | `Patterns/Executor.cs` | Hand-written reason/act/observe loop; iteration, tool-call and time budgets; allowlist; idempotency keys on every effect, including the customer email (durable outbox) |
 | ⑤ | Orchestrator–workers | `Orchestrator.PlanAsync` | The lead decides which research is needed at runtime; fan-out capped at 4 |
@@ -91,6 +91,20 @@ dotnet user-secrets set "Llm:Endpoint" "http://localhost:11434/v1"
 dotnet user-secrets set "Llm:Model" "<model>"
 dotnet user-secrets set "Llm:ApiKey" "<key or anything for local>"
 ```
+For **Azure OpenAI / Azure AI Foundry**, the resource URL from the portal is enough
+(`https://<resource>.openai.azure.com/`); the app adds `/openai/v1/`. `Llm:Model` is the
+**deployment name**.
+
+**Decision model for the router (optional).** Deploy Microsoft-Decision-1 in the same Foundry
+resource and set its deployment name:
+```bash
+dotnet user-secrets set "Decision:Deployment" "decision-1"
+```
+The router then asks it a single `choice` question and gets back calibrated probabilities per
+category, instead of a confidence number the LLM wrote itself. The endpoint and key default to
+`Llm:Endpoint` / `Llm:ApiKey` (override with `Decision:Endpoint` / `Decision:ApiKey`). If the call
+fails, the router falls back to the LLM and says so on screen. The scripted replay never uses it.
+
 If an endpoint rejects JSON-schema response formats, set `Llm:UseJsonSchema` to `false`. The
 schema then goes in the prompt instead.
 
@@ -102,10 +116,15 @@ draft deliberately leaves out order #1057, so the evaluator always has something
 
 1. **Happy path with the chaos switch**
    `dotnet run -- --reset --chaos`
-   - ② Router: point out the confidence and the floor. Capabilities are granted by code.
+   - ② Router: point out the confidence and the floor. Capabilities are granted by code. With
+     Decision-1 configured, "decided by" shows a decision model, not an LLM: real probabilities,
+     1 output token, about 0.5 s (compare the router row in the economics table).
    - ⑦ Handoff: the order ids came from a regex. "Why is a model needed at this step?"
    - ⑤+③ The lead chose these 4 questions at runtime; the workers ran in parallel. Each quote was checked in code against the source.
-   - ⑥ Evaluator: watch it catch a missing order (live models sometimes get it right first time, which is fine).
+   - ⑥ Evaluator: watch it catch a missing order. With a live model the lead often skips the
+     inventory check at first; the evaluator's coverage check fails, and the lead sends a
+     follow-up worker to inventory before revising (⑤ adapting at runtime). Live models
+     sometimes get it right first time, which is fine.
    - ⑧ Checkpoint: compare it with "Allow agent?". Choose **Pause**.
 2. **Durability.** Open `.data/tasks/T-*.json` in the editor and show that this file is the memory.
    Then run `dotnet run -- --resume --chaos` and approve.

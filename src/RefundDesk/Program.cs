@@ -45,6 +45,8 @@ Directory.CreateDirectory(dataDir);
 var meter = new Meter();
 var (chat, providerLabel, scripted) = LlmFactory.Create(llm);
 var model = new ModelGateway(new MeteredChatClient(Telemetry.Instrument(chat), meter), llm);
+// Optional decision model for the router (Microsoft-Decision-1). Not used by the offline replay.
+using var decision = scripted ? null : DecisionClient.Create(config.GetSection("Decision").Get<DecisionSettings>() ?? new(), llm, meter);
 var store = new TaskStore(dataDir);
 var payments = new PaymentGateway(dataDir) { Chaos = cli.Chaos };
 var orderBook = new OrderBook(payments);
@@ -75,7 +77,8 @@ if (Telemetry.ContextOf(root) is { } traceContext) { task.Traces.Add(traceContex
 
 // ---- banner ----------------------------------------------------------------------------
 AnsiConsole.Write(new Panel(new Rows(
-        new Markup($"[grey]Model:[/] {(scripted ? "[yellow]" : "[green]")}{Ui.E(providerLabel)}[/]"),
+        new Markup($"[grey]Model:[/] {(scripted ? "[yellow]" : "[green]")}{Ui.E(providerLabel)}[/]" +
+                   (decision is null ? "" : $"   [grey]router:[/] [green]{Ui.E(decision.Deployment)}[/] [grey](decision model)[/]")),
         new Markup($"[grey]Task:[/]  {task.Id} {(cli.Resume ? $"[blue](resuming, status: {task.Status})[/]" : "[grey](new)[/]")}" +
                    $"{(cli.Chaos ? "   [red]chaos: payment gateway will time out mid-effect[/]" : "")}"),
         new Markup(Telemetry.IsOn
@@ -92,7 +95,7 @@ Ui.StageHeader("②", "Router", "One cheap classification call. Abstains when un
 using (Telemetry.Source.StartActivity("② route + ⑦ handoff"))
 if (!task.Reached("routed"))
 {
-    task.Route = await Ui.Spin("classifying request...", () => new Router(model).ClassifyAsync(task.Request));
+    (task.Route, task.RoutedBy) = await Ui.Spin("classifying request...", () => new Router(model, decision).ClassifyAsync(task.Request));
 
     // ⑦ Specialist handoff: deterministic facts + capabilities travel with the task.
     var orderIds = Router.ExtractOrderIds(task.Request.Text);
@@ -107,6 +110,7 @@ else Ui.Resumed($"route = {task.Route!.Category}");
 var routeColor = task.Route!.Category == "unknown" ? "red" : "green";
 AnsiConsole.MarkupLine($"  route: [bold {routeColor}]{task.Route.Category}[/]  confidence: {task.Route.Confidence:0.00} " +
                        $"[grey](floor {Router.ConfidenceFloor:0.0})[/]  [grey]{Ui.E(task.Route.Rationale)}[/]");
+if (task.RoutedBy is not null) AnsiConsole.MarkupLine($"  [grey]decided by:[/] {Ui.E(task.RoutedBy)}");
 
 if (task.Route.Category != "billing")
 {
@@ -173,7 +177,7 @@ if (!task.Reached("evaluated"))
         if (verdict.Pass)
         {
             Ui.Ok("deterministic checks passed (coverage, amounts, ownership, order state, cited evidence)");
-            verdict = await Ui.Spin("evaluator applying rubric...", () => evaluator.CheckRubricAsync(task.Request, task.Findings, draft));
+            verdict = await Ui.Spin("evaluator applying rubric...", () => evaluator.CheckRubricAsync(task.Request, task.Orders, task.Findings, draft));
         }
         task.Evaluations.Add(verdict);
         Save();
@@ -184,6 +188,23 @@ if (!task.Reached("evaluated"))
         if (verdict.Pass) { Ui.Ok($"{verdict.Kind} rubric passed"); break; }
         foreach (var issue in verdict.Issues) Ui.Fail($"{verdict.Kind}: {issue}");
         feedback = verdict;
+
+        // ⑤ adaptive: if the gap is missing evidence, the lead can send workers back out.
+        if (round < Evaluator.MaxRounds)
+        {
+            var more = await Ui.Spin("lead deciding whether more research would help...",
+                () => orchestrator.FollowUpAsync(task.Request, task.Orders, task.Findings, verdict));
+            if (more.Subtasks.Count > 0)
+            {
+                foreach (var s in more.Subtasks)
+                    AnsiConsole.MarkupLine($"  [bold]{Ui.E(s.Id)}[/] [blue]{Ui.E(s.Source),-10}[/] {Ui.E(s.Question)} [grey](follow-up)[/]");
+                var extra = await Ui.Spin($"{more.Subtasks.Count} follow-up worker(s) researching...", () => orchestrator.ResearchAsync(more));
+                foreach (var f in extra)
+                    AnsiConsole.MarkupLine($"  [blue]{Ui.E(f.Source)}[/] {Ui.E(f.Answer)} {(f.QuoteVerified ? "[green]✓ verified[/]" : "[red]✗ quote not found[/]")}");
+                task.Findings.AddRange(extra);
+                Save();
+            }
+        }
     }
     task.Status = "evaluated";
     Save();

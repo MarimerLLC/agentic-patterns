@@ -26,7 +26,9 @@ public sealed class Orchestrator(ModelGateway model)
             You are the lead billing specialist. Decide what policy research is needed before
             proposing a resolution. Create one subtask per question you need answered; each
             subtask reads exactly ONE knowledge source. Use at most {MaxWorkers} subtasks and
-            only the sources that matter. Knowledge sources:
+            only the sources that matter. Policies often depend on facts (stock levels, dates,
+            order status); research the facts a policy's conditions depend on, too.
+            Knowledge sources:
             {catalog}
             Respond with JSON only.
             """;
@@ -34,6 +36,45 @@ public sealed class Orchestrator(ModelGateway model)
 
         // Bounded fan-out and valid sources are enforced here, whatever the model said.
         var valid = plan.Subtasks.Where(s => SampleData.Knowledge.ContainsKey(s.Source)).Take(MaxWorkers).ToList();
+        return new ResearchPlan(valid);
+    }
+
+    public const int MaxFollowUps = 2;
+
+    /// <summary>
+    /// The adaptive half of orchestrator-workers: when the evaluator rejects a draft because
+    /// evidence is missing, rewriting the draft cannot fix it. The lead may commission more
+    /// research (bounded) before revising.
+    /// </summary>
+    public async Task<ResearchPlan> FollowUpAsync(
+        CustomerRequest request, IReadOnlyList<Order> orders, IReadOnlyList<Finding> findings, Evaluation feedback,
+        CancellationToken ct = default)
+    {
+        using var _ = Stage.Enter("orchestrator:followup");
+        var catalog = string.Join("\n", SampleData.Knowledge.Values.Select(k => $"  {k.Id}: {k.Title}"));
+
+        var system = $"""
+            You are the lead billing specialist. The evaluator rejected your draft resolution.
+            If any issue is caused by a fact you have not researched yet (for example a policy
+            whose condition depends on stock, dates or order state), list follow-up subtasks,
+            each reading exactly ONE knowledge source, at most {MaxFollowUps}. If more research
+            would not help, return an empty list. Knowledge sources:
+            {catalog}
+            Respond with JSON only.
+            """;
+        var user = new StringBuilder(Describe(request, orders));
+        user.AppendLine("\nResearch so far:");
+        foreach (var f in findings)
+            user.AppendLine($"  [{f.Source}] Q: {f.Question}\n    A: {f.Answer}");
+        user.AppendLine("\nEvaluator issues:");
+        foreach (var issue in feedback.Issues) user.AppendLine($"  - {issue}");
+
+        var plan = await model.AskAsync<ResearchPlan>(system, user.ToString(), ct);
+
+        // Same bounds as the first plan, plus fresh ids so findings stay traceable.
+        var next = findings.Count;
+        var valid = plan.Subtasks.Where(s => SampleData.Knowledge.ContainsKey(s.Source)).Take(MaxFollowUps)
+            .Select(s => s with { Id = $"r{++next}" }).ToList();
         return new ResearchPlan(valid);
     }
 
