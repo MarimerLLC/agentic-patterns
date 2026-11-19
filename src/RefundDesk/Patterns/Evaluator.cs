@@ -34,9 +34,9 @@ public sealed class Evaluator(ModelGateway model)
             if (order.CustomerId != request.CustomerId) issues.Add($"Order #{order.Id} belongs to a different customer.");
             if (a.AmountCents <= 0 || a.AmountCents > order.AmountCents)
                 issues.Add($"Amount {Ui.Money(a.AmountCents)} on #{order.Id} is outside 0..{Ui.Money(order.AmountCents)}.");
-            if (a.Type == "refund" && order.Status != "Delivered") issues.Add($"#{order.Id} is {order.Status}; 'refund' needs Delivered.");
-            if (a.Type == "cancel_backorder" && order.Status != "Backordered") issues.Add($"#{order.Id} is {order.Status}; cancel needs Backordered.");
-            if (a.Type is not ("refund" or "cancel_backorder")) issues.Add($"Unknown action type '{a.Type}'.");
+            if (a.Type == ActionKind.Refund && order.Status != "Delivered") issues.Add($"#{order.Id} is {order.Status}; '{ActionKind.Refund}' needs Delivered.");
+            if (a.Type == ActionKind.CancelBackorder && order.Status != "Backordered") issues.Add($"#{order.Id} is {order.Status}; cancel needs Backordered.");
+            if (a.Type is not (ActionKind.Refund or ActionKind.CancelBackorder)) issues.Add($"Unknown action type '{a.Type}'.");
             if (!supported.Contains(a.PolicySource)) issues.Add($"Action on #{order.Id} cites '{a.PolicySource}', which has no verified evidence.");
         }
 

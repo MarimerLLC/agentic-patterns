@@ -52,7 +52,7 @@ public record Finding(string SubtaskId, string Source, string Question, string A
 
 // ⑤ Lead synthesis
 public record ProposedAction(
-    [property: Description("refund (delivered order) or cancel_backorder (unshipped backordered order)")] string Type,
+    [property: Description($"{ActionKind.Refund} (delivered order) or {ActionKind.CancelBackorder} (unshipped backordered order)")] string Type,
     [property: Description("Order id without '#'")] string OrderId,
     [property: Description("Amount in cents")] int AmountCents,
     [property: Description("Why this action is justified")] string Reason,

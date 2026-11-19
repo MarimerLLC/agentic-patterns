@@ -80,9 +80,9 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
 
     private static Proposal Synthesize(bool revised)
     {
-        var tent = new ProposedAction("refund", "1042", 34900,
+        var tent = new ProposedAction(ActionKind.Refund, "1042", 34900,
             "Pole failure on first use is a covered defect and replacement poles are out of stock, so the warranty allows a full refund.", "warranty");
-        var stakes = new ProposedAction("cancel_backorder", "1057", 3900,
+        var stakes = new ProposedAction(ActionKind.CancelBackorder, "1057", 3900,
             "Stakes are backordered and unshipped; the customer may cancel for a full refund.", "backorders");
 
         return revised
@@ -118,8 +118,8 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
             if (!calls.Any(c => c.Name == "get_order" && Arg(c, "orderId") == a.OrderId))
                 return Call("get_order", new() { ["orderId"] = a.OrderId });
 
-            var effectName = a.Type == "refund" ? "issue_refund" : "cancel_backorder";
-            var effectArgs = a.Type == "refund"
+            var effectName = a.Type == ActionKind.Refund ? "issue_refund" : "cancel_backorder";
+            var effectArgs = a.Type == ActionKind.Refund
                 ? new Dictionary<string, object?> { ["orderId"] = a.OrderId, ["amountCents"] = a.AmountCents, ["idempotencyKey"] = step.IdempotencyKey }
                 : new Dictionary<string, object?> { ["orderId"] = a.OrderId, ["idempotencyKey"] = step.IdempotencyKey };
 

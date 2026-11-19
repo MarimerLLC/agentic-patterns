@@ -109,10 +109,10 @@ public sealed class Orchestrator(ModelGateway model)
         Evaluation? feedback, Proposal? previous, CancellationToken ct = default)
     {
         using var _ = Stage.Enter("orchestrator:synthesize");
-        var system = """
+        var system = $"""
             You are the lead billing specialist. Using ONLY the verified findings and order
-            facts, propose a resolution. Each action must be "refund" (delivered order) or
-            "cancel_backorder" (unshipped backordered order), cite the knowledge source that
+            facts, propose a resolution. Each action must be "{ActionKind.Refund}" (delivered order) or
+            "{ActionKind.CancelBackorder}" (unshipped backordered order), cite the knowledge source that
             justifies it, and use the exact order amount in cents. Write a short, friendly
             customer reply that promises nothing beyond the proposed actions. List anything
             you assumed rather than verified. Respond with JSON only.
