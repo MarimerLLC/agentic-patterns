@@ -45,6 +45,7 @@ var model = new ModelGateway(new MeteredChatClient(chat, meter), llm);
 var store = new TaskStore(dataDir);
 var payments = new PaymentGateway(dataDir) { Chaos = cli.Chaos };
 var orderBook = new OrderBook(payments);
+var outbox = new Outbox(dataDir);
 var wall = Stopwatch.StartNew();
 
 TaskRecord task;
@@ -58,6 +59,7 @@ else
     task = store.Create(request);
 }
 void Save() => store.Save(task);
+static string ReplyKey(string taskId) => $"{taskId}:reply";
 
 // ---- banner ----------------------------------------------------------------------------
 AnsiConsole.Write(new Panel(new Rows(
@@ -206,7 +208,7 @@ foreach (var a in task.Approval!.Actions)
 Ui.StageHeader("④", "Tool-use loop", $"Model chooses each step. Budgets: {Executor.MaxIterations} iterations, {Executor.MaxToolCalls} tool calls, {Executor.TimeBudget.TotalMinutes:0} min. Effects are idempotent.");
 if (!task.Reached("executed"))
 {
-    var tools = new BillingTools(orderBook, payments, task.Approval, meter);
+    var tools = new BillingTools(orderBook, payments, outbox, task.Approval, task.Request.CustomerId, ReplyKey(task.Id), meter);
     var stopReason = await new Executor(model, tools, meter).RunAsync(task.Approval, task.Handoff!.Capabilities, task.ExecutionLog);
     task.Outcome = stopReason;
     task.Status = "executed";
@@ -215,7 +217,7 @@ if (!task.Reached("executed"))
 else Ui.Resumed($"executed ({task.Outcome})");
 
 // ---- Verify by reading back the system of record -----------------------------------------
-Ui.StageHeader("✓", "Verify", "Don't trust the agent's summary: read the payment ledger back and compare it to the approval.");
+Ui.StageHeader("✓", "Verify", "Don't trust the agent's summary: read the payment ledger and outbox back and compare them to the approval.");
 foreach (var a in task.Approval.Actions)
 {
     var entries = payments.Ledger.Where(e => e.IdempotencyKey == a.IdempotencyKey).ToList();
@@ -227,6 +229,11 @@ foreach (var a in task.Approval.Actions)
 var unapproved = payments.Ledger.Where(e => e.IdempotencyKey.StartsWith(task.Id) && task.Approval.Actions.All(a => a.IdempotencyKey != e.IdempotencyKey)).ToList();
 if (unapproved.Count == 0) Ui.Ok("no money moved that the approver did not see");
 else Ui.Fail($"{unapproved.Count} ledger entries were not approved");
+var replies = outbox.Sent.Where(m => m.IdempotencyKey == ReplyKey(task.Id)).ToList();
+if (replies.Count == 1 && replies[0].Text == task.Approval.CustomerReply)
+    Ui.Ok($"customer reply sent exactly once ({replies[0].MessageId}), text as approved");
+else
+    Ui.Fail($"expected one approved customer reply, found {replies.Count}");
 
 Ui.Economics(meter, scripted, wall.Elapsed);
 AnsiConsole.MarkupLine($"[grey]Task record:[/] {Ui.E(store.PathFor(task.Id))}");

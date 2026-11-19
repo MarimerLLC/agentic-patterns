@@ -104,7 +104,6 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
     {
         var first = history.First(m => m.Role == ChatRole.User).Text;
         var plan = JsonSerializer.Deserialize<List<ApprovedAction>>(Between(first, "<approved_plan>", "</approved_plan>"), Json.Options)!;
-        var reply = Between(first, "<customer_reply>", "</customer_reply>").Trim();
 
         var calls = history.SelectMany(m => m.Contents).OfType<FunctionCallContent>().ToList();
         var results = history.SelectMany(m => m.Contents).OfType<FunctionResultContent>()
@@ -141,7 +140,7 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
         }
 
         if (!calls.Any(c => c.Name == "send_customer_message"))
-            return Call("send_customer_message", new() { ["text"] = reply });
+            return Call("send_customer_message", []);
 
         return new ChatMessage(ChatRole.Assistant,
             $"All {plan.Count} approved actions are complete and the customer reply was sent." +

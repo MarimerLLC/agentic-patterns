@@ -20,7 +20,7 @@ avoid being charged for a backordered stakes order (#1057).
 | ① | Prompt chain | `Program.cs` | Each stage hands a typed record to the next; gates between stages |
 | ② | Router | `Patterns/Router.cs` | Confidence floor → `unknown`; capabilities come from code, not the classifier; order ids come from a regex, not a model |
 | ③ | Parallel fan-out | `Orchestrator.ResearchAsync` | `Task.WhenAll` over workers; each quote is checked against the source in code |
-| ④ | Tool-use loop | `Patterns/Executor.cs` | Hand-written reason/act/observe loop; iteration, tool-call and time budgets; allowlist; idempotency keys |
+| ④ | Tool-use loop | `Patterns/Executor.cs` | Hand-written reason/act/observe loop; iteration, tool-call and time budgets; allowlist; idempotency keys on every effect, including the customer email (durable outbox) |
 | ⑤ | Orchestrator–workers | `Orchestrator.PlanAsync` | The lead decides which research is needed at runtime; fan-out capped at 4 |
 | ⑥ | Evaluator–optimizer | `Patterns/Evaluator.cs` | Deterministic checks first, then a model rubric; max 3 rounds; issues go back to the lead |
 | ⑦ | Specialist handoff | `HandoffPackage` | Typed package, one owner, capabilities re-evaluated at the boundary |
@@ -48,7 +48,7 @@ dotnet run                       # scripted replay unless a key is configured (s
 | `--request "text"` | Use a different customer message (try something off-topic to see the router abstain) |
 | `--auto-approve` | Skip the approval prompt (rehearsal only) |
 | `--fast` | No simulated think time in scripted mode |
-| `--reset` | Delete `.data/` (task records and the payment ledger) |
+| `--reset` | Delete `.data/` (task records, the payment ledger and the message outbox) |
 
 ### Model configuration
 
@@ -88,7 +88,9 @@ draft deliberately leaves out order #1057, so the evaluator always has something
    Then run `dotnet run -- --resume --chaos` and approve.
 3. **Ambiguous side effect.** The first refund returns `TIMEOUT`. The agent checks
    `get_payment_status` with the same idempotency key rather than paying again.
-4. **Verify.** The ledger read-back shows exactly one effect per approved action.
+4. **Verify.** The ledger read-back shows exactly one effect per approved action, and the
+   outbox shows the customer reply went out once, with the approved text. The send tool takes
+   no text argument, so the model can trigger the email but cannot rewrite it.
 5. **Economics.** The table at the end shows cost per successful task.
 6. **Router abstains** (optional, audience participation):
    `dotnet run -- --request "What's the best trail in Colorado?"`
