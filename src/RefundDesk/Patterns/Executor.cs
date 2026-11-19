@@ -152,13 +152,13 @@ public sealed class BillingTools(OrderBook orders, PaymentGateway payments, Outb
         [Description("Order id without '#'")] string orderId,
         [Description("Amount in cents")] int amountCents,
         [Description("Idempotency key from the approved plan")] string idempotencyKey) =>
-        Effect("refund", orderId, amountCents, idempotencyKey);
+        Effect(ActionKind.Refund, orderId, amountCents, idempotencyKey);
 
     [Description("Cancel an unshipped backordered order and refund its full charge.")]
     public string CancelBackorder(
         [Description("Order id without '#'")] string orderId,
         [Description("Idempotency key from the approved plan")] string idempotencyKey) =>
-        Effect("cancel_backorder", orderId, orders.Find(orderId)?.AmountCents ?? 0, idempotencyKey);
+        Effect(ActionKind.CancelBackorder, orderId, orders.Find(orderId)?.AmountCents ?? 0, idempotencyKey);
 
     [Description("Check whether the payment effect for an idempotency key has happened.")]
     public string GetPaymentStatus([Description("Idempotency key")] string idempotencyKey) =>
