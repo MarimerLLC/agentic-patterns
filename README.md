@@ -49,6 +49,29 @@ dotnet run                       # scripted replay unless a key is configured (s
 | `--auto-approve` | Skip the approval prompt (rehearsal only) |
 | `--fast` | No simulated think time in scripted mode |
 | `--reset` | Delete `.data/` (task records, the payment ledger and the message outbox) |
+| `--otel` | Send OpenTelemetry traces and metrics over OTLP (see below). Off by default |
+
+### Watching it in the Aspire dashboard (optional)
+
+Telemetry is opt-in. It turns on with `--otel`, `Telemetry:Enabled`, or when `OTEL_EXPORTER_OTLP_ENDPOINT`
+is set (default endpoint `http://localhost:4317`). When it is off, nothing is listening and the run
+is unchanged. Start the standalone dashboard in its own window (no Aspire AppHost: the approval
+prompt needs a real terminal):
+
+```bash
+docker run --rm -it -p 18888:18888 -p 4317:18889 -e DASHBOARD__FRONTEND__AUTHMODE=Unsecured \
+  mcr.microsoft.com/dotnet/aspire-dashboard:latest
+dotnet run -- --reset --chaos --otel      # then open http://localhost:18888/traces
+```
+
+The trace follows the composed flow: a root span per run, a span per stage numbered like the
+slides, the four `③ worker` spans side by side, `round 1` / `round 2` of the evaluator (round 1
+marked as an error with the issue it found), the `⑧ human checkpoint` span showing how long the
+human took, and one span per `④` iteration and tool call, with the `TIMEOUT` marked as an error.
+The `chat` spans under each stage come from `Microsoft.Extensions.AI`'s `UseOpenTelemetry()` and
+carry the model, token counts and, with `Telemetry:CaptureContent` (on by default; sample data
+only), the exact prompt and response. After `--resume`, the new trace links back to the earlier
+runs of the same task (ids are kept in the task record). `Unsecured` is for a local demo only.
 
 ### Model configuration
 
@@ -91,7 +114,9 @@ draft deliberately leaves out order #1057, so the evaluator always has something
 4. **Verify.** The ledger read-back shows exactly one effect per approved action, and the
    outbox shows the customer reply went out once, with the approved text. The send tool takes
    no text argument, so the model can trigger the email but cannot rewrite it.
-5. **Economics.** The table at the end shows cost per successful task.
+5. **Economics.** The table at the end shows cost per successful task. If you ran with `--otel`,
+   switch to the dashboard: the waterfall shows the parallel workers, and clicking the router's
+   `chat` span shows exactly what the model saw and how many tokens it cost.
 6. **Router abstains** (optional, audience participation):
    `dotnet run -- --request "What's the best trail in Colorado?"`
 

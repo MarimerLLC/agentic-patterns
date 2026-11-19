@@ -170,6 +170,10 @@ public sealed class ScriptedChatClient(int delayMs) : IChatClient
             yield return update;
     }
 
-    public object? GetService(Type serviceType, object? serviceKey = null) => null;
+    private static readonly ChatClientMetadata Metadata = new("scripted-replay", null, "scripted");
+
+    public object? GetService(Type serviceType, object? serviceKey = null) =>
+        serviceKey is null && serviceType.IsInstanceOfType(Metadata) ? Metadata
+        : serviceKey is null && serviceType.IsInstanceOfType(this) ? this : null;
     public void Dispose() { }
 }

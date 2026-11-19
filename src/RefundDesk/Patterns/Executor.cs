@@ -57,6 +57,7 @@ public sealed class Executor(ModelGateway model, BillingTools tools, Meter meter
         {
             meter.LoopIterations = iteration;
             if (clock.Elapsed > TimeBudget) return Stop("time budget spent", log);
+            using var iterationSpan = Telemetry.Source.StartActivity($"iteration {iteration}");
 
             // REASON: the model chooses the next step from everything observed so far.
             var response = await Ui.Spin($"iteration {iteration}: model choosing next step...",
@@ -77,6 +78,9 @@ public sealed class Executor(ModelGateway model, BillingTools tools, Meter meter
             {
                 if (++toolCalls > MaxToolCalls) return Stop("tool-call budget spent", log);
                 meter.ToolCall("executor");
+                using var toolSpan = Telemetry.Source.StartActivity($"tool: {call.Name}");
+                toolSpan?.SetTag("gen_ai.tool.name", call.Name);
+                toolSpan?.SetTag("gen_ai.tool.call.id", call.CallId);
 
                 string result;
                 if (!allowed.TryGetValue(call.Name, out var fn))
@@ -93,6 +97,10 @@ public sealed class Executor(ModelGateway model, BillingTools tools, Meter meter
                 AnsiConsole.MarkupLine($"[grey]  {iteration,2}[/] [bold]{Ui.E(call.Name)}[/]([grey]{Ui.E(Shorten(args, 90))}[/])");
                 AnsiConsole.MarkupLine($"       [{color}]→ {Ui.E(Shorten(result, 140))}[/]");
                 log.Add($"{call.Name}({args}) -> {result}");
+                toolSpan?.SetTag("refunddesk.tool.arguments", args);
+                toolSpan?.SetTag("refunddesk.tool.result", result);
+                if (result.StartsWith("TIMEOUT") || result.StartsWith("DENIED") || result.StartsWith("ERROR"))
+                    toolSpan.Fail(result.Split(':')[0]);
                 results.Add(new FunctionResultContent(call.CallId, result));
             }
             messages.Add(new ChatMessage(ChatRole.Tool, results));
@@ -104,6 +112,7 @@ public sealed class Executor(ModelGateway model, BillingTools tools, Meter meter
     {
         AnsiConsole.MarkupLine($"[red]  stopped: {reason}[/]");
         log.Add($"stopped: {reason}");
+        Activity.Current?.AddEvent(new ActivityEvent($"stopped: {reason}"));
         return reason;
     }
 

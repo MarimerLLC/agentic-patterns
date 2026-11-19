@@ -88,12 +88,20 @@ public static class Stage
     {
         var previous = CurrentName.Value;
         CurrentName.Value = name;
-        return new Restore(previous);
+        // Each stage is also a span (null, and free, when telemetry is off). Activity.Current
+        // flows the same way as this AsyncLocal, so parallel workers become sibling spans.
+        var span = Telemetry.Source.StartActivity(Telemetry.SpanName(name));
+        span?.SetTag("refunddesk.stage", name);
+        return new Restore(previous, span);
     }
 
-    private sealed class Restore(string? previous) : IDisposable
+    private sealed class Restore(string? previous, Activity? span) : IDisposable
     {
-        public void Dispose() => CurrentName.Value = previous;
+        public void Dispose()
+        {
+            span?.Dispose();
+            CurrentName.Value = previous;
+        }
     }
 }
 

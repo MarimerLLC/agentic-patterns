@@ -19,8 +19,11 @@ public static class Ui
         AnsiConsole.MarkupLine($"[grey]{E(why)}[/]");
     }
 
-    public static void Resumed(string what) =>
+    public static void Resumed(string what)
+    {
+        System.Diagnostics.Activity.Current?.SetTag("refunddesk.resumed_from_record", what);
         AnsiConsole.MarkupLine($"[blue]↻ resumed from task record:[/] [grey]{E(what)}[/]");
+    }
 
     public static void Note(string text) => AnsiConsole.MarkupLine($"[grey]  {E(text)}[/]");
     public static void Ok(string text) => AnsiConsole.MarkupLine($"[green]  ✓[/] {E(text)}");

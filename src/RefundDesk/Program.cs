@@ -35,13 +35,16 @@ if (cli.Provider is not null) llm.Provider = cli.Provider;
 if (cli.Model is not null) llm.Model = cli.Model;
 if (cli.Fast) llm.ScriptedDelayMs = 0;
 
+// Opt-in OpenTelemetry (--otel or OTEL_EXPORTER_OTLP_ENDPOINT). Off by default: no listeners, no cost.
+using var telemetry = Telemetry.Start(config.GetSection("Telemetry").Get<TelemetrySettings>() ?? new(), cli.Otel);
+
 var dataDir = Path.Combine(Directory.GetCurrentDirectory(), ".data");
 if (cli.Reset && Directory.Exists(dataDir)) Directory.Delete(dataDir, recursive: true);
 Directory.CreateDirectory(dataDir);
 
 var meter = new Meter();
 var (chat, providerLabel, scripted) = LlmFactory.Create(llm);
-var model = new ModelGateway(new MeteredChatClient(chat, meter), llm);
+var model = new ModelGateway(new MeteredChatClient(Telemetry.Instrument(chat), meter), llm);
 var store = new TaskStore(dataDir);
 var payments = new PaymentGateway(dataDir) { Chaos = cli.Chaos };
 var orderBook = new OrderBook(payments);
@@ -61,11 +64,23 @@ else
 void Save() => store.Save(task);
 static string ReplyKey(string taskId) => $"{taskId}:reply";
 
+// One trace per run. A resumed run links back to the earlier runs of the same task.
+using var root = Telemetry.Source.StartActivity($"refund task {task.Id}", ActivityKind.Internal, default(ActivityContext),
+    links: Telemetry.LinksTo(task.Traces));
+root?.SetTag("refunddesk.task.id", task.Id);
+root?.SetTag("refunddesk.resumed", cli.Resume);
+root?.SetTag("refunddesk.chaos", cli.Chaos);
+root?.SetTag("refunddesk.provider", providerLabel);
+if (Telemetry.ContextOf(root) is { } traceContext) { task.Traces.Add(traceContext); Save(); }
+
 // ---- banner ----------------------------------------------------------------------------
 AnsiConsole.Write(new Panel(new Rows(
         new Markup($"[grey]Model:[/] {(scripted ? "[yellow]" : "[green]")}{Ui.E(providerLabel)}[/]"),
         new Markup($"[grey]Task:[/]  {task.Id} {(cli.Resume ? $"[blue](resuming, status: {task.Status})[/]" : "[grey](new)[/]")}" +
                    $"{(cli.Chaos ? "   [red]chaos: payment gateway will time out mid-effect[/]" : "")}"),
+        new Markup(Telemetry.IsOn
+            ? $"[grey]OTel:[/]  → {Ui.E(Telemetry.Endpoint)}{(Telemetry.CaptureContent ? " [grey](prompts captured)[/]" : "")}  [grey]trace[/] {root?.TraceId.ToHexString()[..7] ?? "-"}"
+            : "[grey]OTel:  off (--otel to send traces to the Aspire dashboard)[/]"),
         new Markup("[grey]Flow:[/]  ② route → ⑦ handoff → ⑤ plan → ③ research → ⑥ evaluate → ⑧ approve → ④ execute → verify   [grey](① chain, ⑨ saved at every step)[/]")))
     .Header("[bold] Trailhead Gear · Refund Desk [/]").BorderColor(Color.Yellow));
 
@@ -74,6 +89,7 @@ AnsiConsole.Write(new Panel(Ui.E(string.Join(' ', task.Request.Text.Split((char[
 
 // ---- ② Router --------------------------------------------------------------------------
 Ui.StageHeader("②", "Router", "One cheap classification call. Abstains when unsure; authorization is not the classifier's job.");
+using (Telemetry.Source.StartActivity("② route + ⑦ handoff"))
 if (!task.Reached("routed"))
 {
     task.Route = await Ui.Spin("classifying request...", () => new Router(model).ClassifyAsync(task.Request));
@@ -96,6 +112,7 @@ if (task.Route.Category != "billing")
 {
     var where = task.Route.Category == "unknown" ? "the human support queue (no route fits)" : $"the {task.Route.Category} specialist (not built in this demo)";
     task.Outcome = $"handed off to {where}";
+    root?.SetTag("refunddesk.outcome", task.Outcome);
     Save();
     Ui.Warn($"Handed off to {where}. Nothing else runs; tools granted: {(task.Handoff!.Capabilities.Count == 0 ? "none" : string.Join(", ", task.Handoff.Capabilities))}.");
     Ui.Economics(meter, scripted, wall.Elapsed);
@@ -115,6 +132,7 @@ AnsiConsole.Write(handoffTable);
 // ---- ⑤ Orchestrator + ③ parallel workers -------------------------------------------------
 Ui.StageHeader("⑤ + ③", "Orchestrator-workers with parallel fan-out", $"The lead decides what to research at runtime (max {Orchestrator.MaxWorkers} workers); workers run in parallel.");
 var orchestrator = new Orchestrator(model);
+using (Telemetry.Source.StartActivity("⑤ + ③ research"))
 if (!task.Reached("researched"))
 {
     task.Plan = await Ui.Spin("lead is planning research...", () => orchestrator.PlanAsync(task.Request, task.Orders));
@@ -137,11 +155,13 @@ AnsiConsole.Write(findingsTable);
 // ---- ⑥ Evaluator-optimizer --------------------------------------------------------------
 Ui.StageHeader("⑥", "Evaluator-optimizer", $"Deterministic checks first, then a model rubric. Revise up to {Evaluator.MaxRounds} rounds, then escalate.");
 var evaluator = new Evaluator(model);
+using (Telemetry.Source.StartActivity("⑥ evaluate + revise"))
 if (!task.Reached("evaluated"))
 {
     Evaluation? feedback = null;
     for (var round = 1; round <= Evaluator.MaxRounds; round++)
     {
+        using var roundSpan = Telemetry.Source.StartActivity($"round {round}");
         meter.EvaluatorRounds = round;
         var draft = await Ui.Spin(round == 1 ? "lead is drafting a resolution..." : $"lead is revising (round {round})...",
             () => orchestrator.SynthesizeAsync(task.Request, task.Orders, task.Findings, feedback, task.Proposal));
@@ -157,6 +177,9 @@ if (!task.Reached("evaluated"))
         }
         task.Evaluations.Add(verdict);
         Save();
+        roundSpan?.SetTag("refunddesk.evaluation.kind", verdict.Kind);
+        roundSpan?.SetTag("refunddesk.evaluation.pass", verdict.Pass);
+        if (!verdict.Pass) roundSpan.Fail($"{verdict.Kind}: {string.Join("; ", verdict.Issues)}");
 
         if (verdict.Pass) { Ui.Ok($"{verdict.Kind} rubric passed"); break; }
         foreach (var issue in verdict.Issues) Ui.Fail($"{verdict.Kind}: {issue}");
@@ -174,12 +197,15 @@ if (task.Approval is { Decision: "rejected" })
     Ui.Warn($"Rejected by {task.Approval.Approver} at {task.Approval.At:t}; task is in the supervisor queue.");
     return;
 }
+using (var checkpointSpan = Telemetry.Source.StartActivity("⑧ human checkpoint"))
 if (!task.Reached("approved"))
 {
     var unresolved = task.Evaluations.LastOrDefault() is { Pass: false } last ? new List<Evaluation> { last } : [];
     HumanCheckpoint.ShowPreview(task, unresolved);
     var choice = HumanCheckpoint.Ask(cli.AutoApprove);
     meter.HumanInterventions++;
+    checkpointSpan?.SetTag("refunddesk.decision", choice.ToString().ToLowerInvariant());
+    root?.SetTag("refunddesk.outcome", choice == HumanCheckpoint.Choice.Pause ? "paused for human" : null);
 
     if (choice == HumanCheckpoint.Choice.Pause)
     {
@@ -208,9 +234,11 @@ foreach (var a in task.Approval!.Actions)
 Ui.StageHeader("④", "Tool-use loop", $"Model chooses each step. Budgets: {Executor.MaxIterations} iterations, {Executor.MaxToolCalls} tool calls, {Executor.TimeBudget.TotalMinutes:0} min. Effects are idempotent.");
 if (!task.Reached("executed"))
 {
+    root?.AddEvent(new ActivityEvent("approved actions handed to the tool-use loop"));
     var tools = new BillingTools(orderBook, payments, outbox, task.Approval, task.Request.CustomerId, ReplyKey(task.Id), meter);
     var stopReason = await new Executor(model, tools, meter).RunAsync(task.Approval, task.Handoff!.Capabilities, task.ExecutionLog);
     task.Outcome = stopReason;
+    root?.SetTag("refunddesk.outcome", stopReason);
     task.Status = "executed";
     Save();
 }
@@ -242,7 +270,7 @@ namespace RefundDesk
 {
     /// <summary>Command-line switches. See README for the demo script.</summary>
     public sealed record Cli(bool Resume, string? ResumeId, bool Chaos, bool AutoApprove, bool Reset, bool Fast,
-        string? RequestText, string? Provider, string? Model)
+        string? RequestText, string? Provider, string? Model, bool Otel)
     {
         public static Cli Parse(string[] args)
         {
@@ -254,7 +282,7 @@ namespace RefundDesk
             bool Has(string name) => args.Contains(name);
 
             return new Cli(Has("--resume"), Value("--resume"), Has("--chaos"), Has("--auto-approve"), Has("--reset"),
-                Has("--fast"), Value("--request"), Value("--provider"), Value("--model"));
+                Has("--fast"), Value("--request"), Value("--provider"), Value("--model"), Has("--otel"));
         }
     }
 }
